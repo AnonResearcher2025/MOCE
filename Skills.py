@@ -5,11 +5,12 @@
 #   End-to-end Skills MOCE pipeline used in the paper.
 # Steps:
 #   1) Load Data-Skills.csv
-#   2) Fit multi-outcome predictive model
-#   3) For employees outside the predicted success bounds, compute MOCE recourse
-#   4) Construct DF_0 (baseline), DF_1 (recourse), DF_diff (DF_1 − DF_0) dataframes
-#   5) Print (i) selected employees (baseline vs recourse), (ii) subset-level change patterns
-#   6) Plot a compact 4×4 histogram grid (top-2 changed skills + outcomes), labeling 3 example employees
+#   2) Fit the multi-outcome model and assess predictive adequacy
+#   3) Compare single-outcome CEs with the joint MOCE
+#   4) Evaluate lenient/main/demanding outcome thresholds
+#   5) Construct DF_0 (baseline), DF_1 (MOCE), and DF_diff dataframes
+#   6) Print illustrative employees and aggregate change patterns
+#   7) Plot the original compact 4×4 histogram grid
 # ============================================================
 
 import io
@@ -23,7 +24,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.utils import check_random_state
 
-import ce_helpers as ch  # project-specific helper functions
+import ce_helpers as ch
+import moce_evaluation as me
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -44,6 +46,13 @@ model = "cart"
 mu = 0
 obj = "l1"
 
+# Empirical evaluation settings
+cv_folds = 5
+cv_repeats = 3
+main_threshold_name = "main"
+evaluation_dir = "results/evaluation"
+setting_slug = "skills"
+
 # Actionable inputs (allowed to change)
 M = [
     "Technical Skills", "Experience", "Judgement", "Independent Work",
@@ -55,6 +64,13 @@ L = M
 # Success bounds
 lb = [3.75, 4]
 ub = [5, 5]
+
+# Lenient/main/demanding outcome requirements
+threshold_specs = {
+    "lenient": {"lb": [3.50, 3.75], "ub": [5.00, 5.00]},
+    "main": {"lb": lb, "ub": ub},
+    "demanding": {"lb": [4.00, 4.25], "ub": [5.00, 5.00]},
+}
 
 
 # ============================================================
@@ -209,6 +225,23 @@ with contextlib.redirect_stdout(_silence):
 
 y_pred_df = pd.DataFrame(y_pred["Outcomes"], columns=out)
 
+# ============================================================
+# Predictive adequacy: repeated CV versus outcome-mean baseline
+# ============================================================
+evaluation_path = me.ensure_output_dir(evaluation_dir)
+cv_detail, cv_summary = me.evaluate_predictive_adequacy(
+    fitted_model=models["Outcomes"],
+    X=X,
+    y=y,
+    outcome_names=out,
+    n_splits=cv_folds,
+    n_repeats=cv_repeats,
+    random_state=rn,
+)
+cv_detail.to_csv(evaluation_path / f"{setting_slug}_predictive_adequacy_repeats.csv", index=False)
+cv_summary.to_csv(evaluation_path / f"{setting_slug}_predictive_adequacy_summary.csv", index=False)
+me.print_predictive_adequacy(cv_summary)
+
 
 # ============================================================
 # Model registry for the optimizer
@@ -229,21 +262,22 @@ model_master["features"] = [[col for col in X.columns]] * len(model_master)
 
 
 # ============================================================
-# Generate MOCEs
+# Single-outcome CE, sequential CE, and MOCE evaluation
 # ============================================================
-condition = (
-    (y_pred_df[out[0]] < lb[0]) | (y_pred_df[out[0]] > ub[0]) |
-    (y_pred_df[out[1]] < lb[1]) | (y_pred_df[out[1]] > ub[1])
-)
-inds = np.where(condition.values)[0]
-
-DF_pairs = []
 _silence2 = io.StringIO()
 
-def solve_moce_for_index(ind: int):
+def solve_counterfactual_for_index(ind, active_outcomes, lower_bounds, upper_bounds, factual_profile=None):
+    constrained_model_master = me.model_master_for_constraints(
+        model_master=model_master,
+        outcome_names=out,
+        lb=lower_bounds,
+        ub=upper_bounds,
+        active_outcomes=active_outcomes,
+    )
+    factual_profile = X.iloc[ind] if factual_profile is None else pd.Series(factual_profile, index=X.columns, dtype=float)
     with contextlib.redirect_stdout(_silence2):
         return ch.opt(
-            X, X, X.loc[ind],
+            X, X, factual_profile,
             [x for x in d["numerical"] if x not in M],
             [],
             M,
@@ -251,44 +285,77 @@ def solve_moce_for_index(ind: int):
             I, L, [], X.columns,
             True, mu, False, False,
             num_counterfactuals,
-            model_master, None,
+            constrained_model_master, None,
             obj=obj,
         )
 
-for ind in inds:
-    CEs, CEs_, _final_model = solve_moce_for_index(ind)
 
-    x0 = pd.to_numeric(CEs_.iloc[0, :-o], errors="coerce")
-    x1 = pd.to_numeric(CEs_.iloc[1, :-o], errors="coerce")
-    CEs_.iloc[1, :-o] = x1 + 0.000001 * (x1 - x0)
+comparison_instances, comparison_summary, main_moce_cache = me.evaluate_ce_comparison(
+    X=X,
+    baseline_predictions=y_pred_df,
+    outcome_names=out,
+    lb=lb,
+    ub=ub,
+    actionable_features=M,
+    solve_fn=solve_counterfactual_for_index,
+    predict_fn=models["Outcomes"].predict,
+    adjustment_mode="relative",
+    adjustment_step=0.000001,
+    display_decimals=3,
+    sequential_clean_starts=True,
+)
+comparison_instances.to_csv(evaluation_path / f"{setting_slug}_ce_comparison_instances.csv", index=False)
+comparison_summary.to_csv(evaluation_path / f"{setting_slug}_ce_comparison_summary.csv", index=False)
 
-    CEs_.iloc[0, -o:] = models["Outcomes"].predict(CEs_.iloc[[0], :-o].astype(float)).ravel()
-    CEs_.iloc[1, -o:] = models["Outcomes"].predict(CEs_.iloc[[1], :-o].astype(float)).ravel()
 
-    CEs_.iloc[1, :-o] = CEs_.iloc[[1], :-o].astype(float).round(3).iloc[0]
+# ============================================================
+# Reconstruct the original MOCE baseline/solution frames
+# ============================================================
+DF_0, DF_1, DF_diff, ordered_original_indices = me.build_moce_frames(
+    X=X,
+    baseline_predictions=y_pred_df,
+    outcome_names=out,
+    lb=lb,
+    ub=ub,
+    moce_cache=main_moce_cache,
+)
 
-    df = CEs_.copy()
-    df.iloc[1:] = df.iloc[1:].where(df.iloc[1:] != df.iloc[0], "-")
-    DF_pairs.append(df)
 
-satisfy_inds = np.where(~condition.values)[0]
-for ind in satisfy_inds:
-    row = X.loc[ind].copy()
-    for j in range(o):
-        row[out[j]] = y_pred_df.iloc[ind, j]
-    dash_row = pd.Series("-", index=row.index)
-    DF_pairs.append(pd.DataFrame([row, dash_row]))
+# ============================================================
+# Threshold sensitivity and setting formulation
+# ============================================================
+threshold_summary = me.evaluate_threshold_sensitivity(
+    threshold_specs=threshold_specs,
+    main_name=main_threshold_name,
+    X=X,
+    baseline_predictions=y_pred_df,
+    outcome_names=out,
+    actionable_features=M,
+    solve_fn=solve_counterfactual_for_index,
+    predict_fn=models["Outcomes"].predict,
+    adjustment_mode="relative",
+    adjustment_step=0.000001,
+    display_decimals=3,
+    main_moce_cache=main_moce_cache,
+)
+threshold_summary.to_csv(evaluation_path / f"{setting_slug}_threshold_sensitivity.csv", index=False)
 
-DF = pd.concat(DF_pairs, ignore_index=True)
-
-DF_0 = DF.iloc[::2].reset_index(drop=True)
-DF_1_raw = DF.iloc[1::2].reset_index(drop=True)
-DF_1 = DF_1_raw.mask(DF_1_raw == "-", DF_0)
-DF_diff = DF_1 - DF_0
-
-DF_0 = DF_0.apply(pd.to_numeric, errors="coerce")
-DF_1 = DF_1.apply(pd.to_numeric, errors="coerce")
-DF_diff = DF_diff.apply(pd.to_numeric, errors="coerce")
+me.save_setting_formulation(
+    output_path=evaluation_path / f"{setting_slug}_setting_formulation.csv",
+    setting="Skills",
+    purpose="Employee development planning with discrete skill changes.",
+    actionable_features=M,
+    fixed_features=I,
+    variable_role="Actionable employee-development variables.",
+    outcome_names=out,
+    main_lb=lb,
+    main_ub=ub,
+    feasibility_restrictions="Only the seven skill variables may change; changes are integer-valued and upward only; employee context is fixed.",
+    distance="L1 change burden over the variables allowed to change.",
+    interpretation="Actionable development recommendation generated by the fitted model, subject to the stated skill and outcome constraints.",
+    model_name=alg,
+    hyperparameters=me.model_hyperparameters(models["Outcomes"]),
+)
 
 
 # ============================================================
@@ -335,6 +402,16 @@ subsets = {
 # ============================================================
 # Prints
 # ============================================================
+me.print_ce_comparison(comparison_summary)
+me.print_threshold_sensitivity(threshold_summary)
+
+selected_comparison = me.selected_case_comparison(
+    comparison_instances=comparison_instances,
+    selected_display_indices=selected_idx,
+    ordered_original_indices=ordered_original_indices,
+)
+selected_comparison.to_csv(evaluation_path / f"{setting_slug}_selected_case_comparison.csv", index=False)
+
 print_selected_employees_compact(
     DF_0=DF_0,
     DF_1=DF_1,
