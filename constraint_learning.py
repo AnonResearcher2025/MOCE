@@ -259,34 +259,44 @@ class ConstraintLearning(object):
         return constraint
 
     def constraint_extrapolation_skRF(self, class_c):
-        columns = ['Tree_id', 'ID'] + [feature for feature in self.get_features_list()] + ['threshold', 'prediction']
-        constraints = pd.DataFrame(columns=columns)
-        for tree_id, tree in enumerate(self.__learner):
-            children_left = tree.tree_.children_left
-            children_right = tree.tree_.children_right
-            feature = tree.tree_.feature
-            threshold = tree.tree_.threshold
+        """Extract all leaf-path constraints from a multi-output sklearn RF.
 
-            # Leaves
-            leave_id = tree.apply(self.__data)
-
-            for i, leaf in enumerate(np.unique(leave_id)):
-                path_leaf = []
-                self.__find_path_skTree(0, path_leaf, leaf, children_left, children_right)
-                constraints_leaf = self.__get_rule_skTree(leaf, path_leaf, self.get_features_list(), columns[:-1], i + 1, class_c, children_left, feature, threshold)
-                constraints_leaf['Tree_id'] = tree_id
-                if class_c == 'continuous':
-                    constraints_leaf['prediction'] = tree.tree_.value[leaf].item()
-                elif class_c == 'binary':
-                    constraints_leaf['prediction'] = float(tree.tree_.value[leaf][0, 1]/sum(tree.tree_.value[leaf][0]))
-                    # constraints_leaf['prediction'] = np.round(self.__learner.tree_.value[leaf].item())
-                elif class_c == 'multiclass':
-                    # for i, class_name in enumerate(columns_classes):
-                    #     constraints_leaf[class_name] = self.__learner.tree_.value[leaf][0, i]/sum(self.__learner.tree_.value[leaf][0])
-                    print('Under Development')
-                constraints = pd.concat([constraints,constraints_leaf])
-
-        return constraints
+        In contrast to the old pandas-concat-per-node implementation, collect
+        rows in memory and construct one dataframe at the end. This also
+        selects the desired output dimension of every multi-output tree.
+        """
+        if class_c != 'continuous':
+            raise NotImplementedError('This MOCE RF export supports regression only.')
+        features = self.get_features_list()
+        columns = ['Tree_id', 'ID'] + features + ['threshold', 'prediction']
+        rows = []
+        for tree_id, estimator in enumerate(self.__learner.estimators_):
+            t = estimator.tree_
+            feature_ids = t.feature
+            thresholds = t.threshold
+            left = t.children_left
+            right = t.children_right
+            leaf_id = 0
+            stack = [(0, ())]
+            while stack:
+                node, path = stack.pop()
+                if left[node] == -1:  # leaf
+                    leaf_id += 1
+                    prediction = float(t.value[node, self.__output_index, 0])
+                    # An unsplit tree also needs one harmless path constraint.
+                    if not path:
+                        rows.append([tree_id, leaf_id] + [0.0] * len(features)
+                                    + [0.0, prediction])
+                    for feat_index, sign, rhs in path:
+                        values = [0.0] * len(features)
+                        values[feat_index] = sign
+                        rows.append([tree_id, leaf_id] + values + [rhs, prediction])
+                else:
+                    f = int(feature_ids[node])
+                    thr = float(thresholds[node])
+                    stack.append((int(right[node]), path + ((f, -1.0, -(thr + 0.000001)),)))
+                    stack.append((int(left[node]), path + ((f, 1.0, thr),)))
+        return pd.DataFrame(rows, columns=columns)
 
     def constraint_extrapolation_skGBM(self, class_c):
         columns = ['Tree_id', 'ID'] + [feature for feature in self.get_features_list()] + ['threshold', 'prediction', 'initial_prediction', 'learning_rate']
@@ -308,11 +318,11 @@ class ConstraintLearning(object):
                 constraints_leaf['Tree_id'] = tree_id
                 if class_c == 'continuous':
                     # print(tree.tree_.value[leaf])
-                    constraints_leaf['prediction'] = tree.tree_.value[leaf].item()
+                    constraints_leaf['prediction'] = tree.tree_.value[leaf, self.__output_index, 0].item()
                     constraints_leaf['initial_prediction'] = self.__learner.init_.constant_.item()
                     constraints_leaf['learning_rate'] = self.__learner.learning_rate
                 else:
-                    constraints_leaf['prediction'] = tree.tree_.value[leaf].item()
+                    constraints_leaf['prediction'] = tree.tree_.value[leaf, self.__output_index, 0].item()
                     constraints_leaf['initial_prediction'] = 0
                     constraints_leaf['learning_rate'] = self.__learner.learning_rate
                 #constraints = constraints.append(constraints_leaf)

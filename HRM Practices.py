@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 from sklearn.utils import check_random_state
 
 import ce_helpers as ch
+from selected_models import train_and_export
 import moce_evaluation as me
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -37,12 +38,12 @@ t = 4
 o = 2
 rn = 42
 
-# Indices (row numbers) of 3 example employees to annotate in the plot.
-selected_idx = [60, 67, 72]
+# Chosen after optimization from the new model; not the old paper's cases.
+selected_idx = []
 
 # MOCE settings
 num_counterfactuals = 1
-model = "mlp"
+model = "rf"
 mu = 0
 obj = "l1"
 
@@ -65,14 +66,14 @@ M = [
 L = []  
 
 # Success bounds
-lb = [6, -float("inf")]
-ub = [float("inf"), 3]
+lb = [6, 1]
+ub = [7, 3]
 
 # Lenient/main/demanding outcome requirements
 threshold_specs = {
-    "lenient": {"lb": [5.50, -float("inf")], "ub": [float("inf"), 3.50]},
+    "lenient": {"lb": [5.9, 1], "ub": [7, 3.1]},
     "main": {"lb": lb, "ub": ub},
-    "demanding": {"lb": [6.50, -float("inf")], "ub": [float("inf"), 2.50]},
+    "demanding": {"lb": [6.1, 1], "ub": [7, 2.9]},
 }
 
 
@@ -194,33 +195,15 @@ y = data[out]
 # ============================================================
 # Train predictive models
 # ============================================================
-y_pred = np.zeros(shape=(len(y), o))
 d = {"target": "Outcomes", "numerical": data.columns[:n].tolist()}
 I = [val for val in d["numerical"] if val not in M]
 
-version = "V1"
-alg = model
-alg_list = [model]
-algorithms = {"Outcomes": alg}
-
-outcome_dict = {
-    "Outcomes": {
-        "task": "continuous",
-        "X features": X.columns,
-        "class": d["target"],
-        "alg_list": alg_list,
-        "X_train": X, "X_test": X,
-        "y_train": y, "y_test": y,
-    }
-}
-
-_silence = io.StringIO()
-with contextlib.redirect_stdout(_silence):
-    ch.train_models(outcome_dict, version)
-    _ = ch.perf_trained_models(version, outcome_dict)
-    y_pred, models = ch.load_model(algorithms, outcome_dict, None)
-
-y_pred_df = pd.DataFrame(y_pred["Outcomes"], columns=out)
+models = {}
+models["Outcomes"], alg, exported_paths, selected_name = train_and_export(
+    setting="hrm_practices", X=X, y=y,
+)
+y_pred_df = pd.DataFrame(models["Outcomes"].predict(X), columns=out)
+print(f"Selected model: {selected_name}")
 
 # ============================================================
 # Predictive adequacy: repeated CV versus outcome-mean baseline
@@ -248,7 +231,7 @@ for i_out in range(len(out)):
     model_master.loc[len(model_master)] = [
         out[i_out],
         alg,
-        f"results/{alg}/{version}_{out[i_out]}_model.csv",
+        exported_paths[out[i_out]],
         "continuous",
         0,
     ]
@@ -298,10 +281,25 @@ comparison_instances, comparison_summary, main_moce_cache = me.evaluate_ce_compa
     actionable_features=M,
     solve_fn=solve_counterfactual_for_index,
     predict_fn=models["Outcomes"].predict,
-    adjustment_mode="relative",
-    adjustment_step=0.000001,
+    adjustment_mode="none",
+    adjustment_step=0.0,
     display_decimals=3,
+    checkpoint_path=evaluation_path / f"{setting_slug}_{selected_name}_main_checkpoint.pkl",
+    checkpoint_tag=selected_name,
+    progress=True,
 )
+# Report focal-outcome CEs only for employees who initially needed that CE.
+# Retain all initially joint-invalid employees for sequential and MOCE methods.
+ce_not_needed = pd.Series(False, index=comparison_instances.index)
+for outcome_name in out:
+    ce_not_needed |= (
+        comparison_instances["method"].eq(f"CE: {outcome_name}")
+        & comparison_instances[f"baseline_{outcome_name}_valid"].astype(bool)
+    )
+comparison_summary = me.summarize_ce_comparison(
+    comparison_instances.loc[~ce_not_needed].copy()
+)
+
 comparison_instances.to_csv(evaluation_path / f"{setting_slug}_ce_comparison_instances.csv", index=False)
 comparison_summary.to_csv(evaluation_path / f"{setting_slug}_ce_comparison_summary.csv", index=False)
 
@@ -318,6 +316,13 @@ DF_0, DF_1, DF_diff, ordered_original_indices = me.build_moce_frames(
     moce_cache=main_moce_cache,
 )
 
+# Three manually selected employees (0-based dataset row IDs)
+selected_original_idx = [43, 219, 86]
+
+selected_idx = [
+    ordered_original_indices.index(i)
+    for i in selected_original_idx
+]
 
 # ============================================================
 # Threshold sensitivity and setting formulation
@@ -331,10 +336,13 @@ threshold_summary = me.evaluate_threshold_sensitivity(
     actionable_features=M,
     solve_fn=solve_counterfactual_for_index,
     predict_fn=models["Outcomes"].predict,
-    adjustment_mode="relative",
-    adjustment_step=0.000001,
+    adjustment_mode="none",
+    adjustment_step=0.0,
     display_decimals=3,
     main_moce_cache=main_moce_cache,
+    checkpoint_path=evaluation_path / f"{setting_slug}_{selected_name}_sensitivity_checkpoint.pkl",
+    checkpoint_tag=selected_name,
+    progress=True,
 )
 threshold_summary.to_csv(evaluation_path / f"{setting_slug}_threshold_sensitivity.csv", index=False)
 
@@ -351,7 +359,7 @@ me.save_setting_formulation(
     feasibility_restrictions="Only HRM practices may change; employee characteristics are fixed; each HRM practice is bounded between 1 and 7.",
     distance="L1 change burden over the variables allowed to change.",
     interpretation="Organization-level intervention design generated by the fitted model, not a causal estimate of practice effects.",
-    model_name=alg,
+    model_name=selected_name,
     hyperparameters=me.model_hyperparameters(models["Outcomes"]),
 )
 
@@ -400,6 +408,8 @@ subsets = {
 # ============================================================
 # Prints
 # ============================================================
+print("\nNumber of evaluated employees per method (focal-valid CE cases only):")
+print(comparison_summary[["method", "n_instances"]].to_string(index=False))
 me.print_ce_comparison(comparison_summary)
 me.print_threshold_sensitivity(threshold_summary)
 
@@ -408,6 +418,18 @@ selected_comparison = me.selected_case_comparison(
     selected_display_indices=selected_idx,
     ordered_original_indices=ordered_original_indices,
 )
+selected_comparison.insert(
+    2, "employee_label",
+    selected_comparison["instance_index"].map(
+        {i: f"Employee {j}" for j, i in enumerate(selected_original_idx, start=1)}
+    ),
+)
+selected_comparison["case_order"] = selected_comparison["instance_index"].map(
+    {i: j for j, i in enumerate(selected_original_idx, start=1)}
+)
+selected_comparison = selected_comparison.sort_values(
+    ["case_order", "method"]
+).drop(columns="case_order")
 selected_comparison.to_csv(evaluation_path / f"{setting_slug}_selected_case_comparison.csv", index=False)
 
 print_selected_employees_compact(DF_0, DF_1, selected_idx, out)
@@ -531,32 +553,37 @@ with plt.rc_context(plot_style):
                 align="center",
             )
 
+            # Label selected employees on BOTH Original and MOCE bars.
             idx_order = [i for i in selected_idx if i in DF_0.index[mask]]
-            vals0 = DF_0.loc[mask, col].reindex(idx_order).dropna().astype(float)
-            vals1 = DF_1.loc[mask, col].reindex(idx_order).dropna().astype(float)
-            vals0 = transform(vals0)
-            vals1 = transform(vals1)
 
-            stack0, stack1 = {}, {}
-            for idx, v in vals0.items():
-                lab = selected_labels.get(idx, str(idx))
-                bidx = int(np.digitize(v, bins) - 1)
-                bidx = max(0, min(bidx, len(counts0) - 1))
-                x = centers[bidx] - (width / 2)
-                k = stack0.get(bidx, 0)
-                y = counts0[bidx] + 0.8 + k * 1.4
-                ax.text(x, y, lab, ha="center", va="bottom", fontweight="bold")
-                stack0[bidx] = k + 1
+            for frame, counts, offset, label_color in (
+                (DF_0, counts0, -width / 2, "#9a241d"),
+                (DF_1, counts1, +width / 2, "#174c7e"),
+            ):
+                vals = transform(
+                    frame.loc[mask, col].reindex(idx_order).dropna().astype(float)
+                )
 
-            for idx, v in vals1.items():
-                lab = selected_labels.get(idx, str(idx))
-                bidx = int(np.digitize(v, bins) - 1)
-                bidx = max(0, min(bidx, len(counts1) - 1))
-                x = centers[bidx] + (width / 2)
-                k = stack1.get(bidx, 0)
-                y = counts1[bidx] + 0.8 + k * 1.4
-                ax.text(x, y, lab, ha="center", va="bottom", fontweight="bold")
-                stack1[bidx] = k + 1
+                stacked = {}
+
+                for idx, value in vals.items():
+                    bidx = int(np.digitize(value, bins) - 1)
+                    bidx = max(0, min(bidx, len(counts) - 1))
+
+                    k = stacked.get(bidx, 0)
+
+                    ax.text(
+                        centers[bidx] + offset,
+                        counts[bidx] + 0.8 + k * 1.3,
+                        selected_labels[idx],
+                        ha="center",
+                        va="bottom",
+                        fontweight="bold",
+                        fontsize=18,
+                        color=label_color,
+                    )
+
+                    stacked[bidx] = k + 1
 
             ax.set_xticks(centers)
             if row_idx == nrows - 1:
@@ -585,4 +612,5 @@ with plt.rc_context(plot_style):
             clip_on=False,
         )
 
+    fig.savefig(evaluation_path / f"{setting_slug}_figure.png", dpi=300, bbox_inches="tight")
     plt.show()

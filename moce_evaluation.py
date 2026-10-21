@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import json
 import time
+import hashlib
+import os
+import pickle
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -26,6 +29,39 @@ def ensure_output_dir(path: Union[str, Path]) -> Path:
     output_dir = Path(path)
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def _checkpoint_data_signature(X: pd.DataFrame, baseline_predictions: pd.DataFrame, outcome_names: Sequence[str]) -> str:
+    """Identify the dataset and fitted predictions, avoiding stale-model resumes."""
+    hasher = hashlib.sha256()
+    hasher.update(pd.util.hash_pandas_object(X, index=True).values.tobytes())
+    hasher.update(pd.util.hash_pandas_object(baseline_predictions.loc[:, outcome_names], index=True).values.tobytes())
+    hasher.update(json.dumps([list(X.columns), list(outcome_names)]).encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _checkpoint_save(path: Union[str, Path], payload: dict) -> None:
+    """Atomically replace a completed-employee checkpoint."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    with temporary.open("wb") as stream:
+        pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(temporary, target)
+
+
+def _checkpoint_load(path: Union[str, Path], signature: str) -> Optional[dict]:
+    target = Path(path)
+    if not target.exists():
+        return None
+    with target.open("rb") as stream:
+        payload = pickle.load(stream)
+    if not isinstance(payload, dict) or payload.get("signature") != signature:
+        raise ValueError(
+            f"Checkpoint {target} does not match this model/data/threshold configuration. "
+            "Use a new checkpoint filename; do not mix results from different RF models."
+        )
+    return payload
 
 
 def _finite_or_none(value):
@@ -286,6 +322,10 @@ def evaluate_ce_comparison(
     adjustment_step: float,
     display_decimals: int,
     sequential_clean_starts: bool = False,
+    checkpoint_path: Optional[Union[str, Path]] = None,
+    checkpoint_tag: str = "",
+    resume: bool = True,
+    progress: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[int, dict]]:
     """Compare single-outcome CEs, two sequential CE orders, and joint MOCE.
 
@@ -307,6 +347,29 @@ def evaluate_ce_comparison(
     invalid_indices = [
         index for index in range(len(X)) if not jointly_valid(baseline_array[index], lb, ub)
     ]
+
+    signature = json.dumps({
+        "kind": "main_ce_comparison_v1",
+        "data": _checkpoint_data_signature(X, baseline_predictions, outcome_names),
+        "model": checkpoint_tag,
+        "lb": list(map(float, lb)), "ub": list(map(float, ub)),
+        "actionable_features": list(actionable_features),
+        "adjustment_mode": adjustment_mode, "adjustment_step": adjustment_step,
+        "display_decimals": display_decimals,
+        "sequential_clean_starts": sequential_clean_starts,
+    }, sort_keys=True)
+    if checkpoint_path is not None and resume:
+        saved_state = _checkpoint_load(checkpoint_path, signature)
+        if saved_state is not None:
+            rows = saved_state["rows"]
+            moce_cache = saved_state["moce_cache"]
+            completed = set(map(int, moce_cache))
+            if not completed.issubset(set(invalid_indices)):
+                raise ValueError("Saved checkpoint contains employees outside the current main cohort.")
+            if len(rows) != 5 * len(completed):
+                raise ValueError("Saved checkpoint has an inconsistent number of comparison rows.")
+            if progress:
+                print(f"[MAIN] Resumed {len(completed)}/{len(invalid_indices)} completed employees from {checkpoint_path}", flush=True)
 
     def unchanged_result(profile: pd.Series, prediction: np.ndarray) -> dict:
         profile = profile.astype(float).copy()
@@ -359,7 +422,12 @@ def evaluate_ce_comparison(
             row[f"solution_{outcome}_valid"] = bool(solution_validity[j])
         return solution_validity, changed, l1_distance
 
-    for index in invalid_indices:
+    for position, index in enumerate(invalid_indices, start=1):
+        if index in moce_cache:
+            continue
+        employee_start = time.perf_counter()
+        if progress:
+            print(f"[MAIN] {position}/{len(invalid_indices)} | employee row {index} | START", flush=True)
         factual = X.iloc[index].astype(float)
         baseline_prediction = baseline_array[index]
         baseline_validity = within_bounds(baseline_prediction, lb, ub)
@@ -611,6 +679,21 @@ def evaluate_ce_comparison(
         )
         moce_cache[index] = cached_result
 
+        if checkpoint_path is not None:
+            _checkpoint_save(checkpoint_path, {
+                "signature": signature, "rows": rows, "moce_cache": moce_cache,
+            })
+            # Readable, partial comparison table. Only the .pkl is used to resume.
+            pd.DataFrame(rows).to_csv(Path(checkpoint_path).with_suffix(".csv"), index=False)
+        if progress:
+            elapsed = time.perf_counter() - employee_start
+            status = "valid" if bool(result["solution_available"]) and bool(solution_validity.all()) else "unavailable/invalid"
+            print(
+                f"[MAIN] {position}/{len(invalid_indices)} | employee row {index} | DONE "
+                f"| {elapsed:.1f}s | MOCE {status} | saved {len(moce_cache)}/{len(invalid_indices)}",
+                flush=True,
+            )
+
     instances = pd.DataFrame(rows)
     summary = summarize_ce_comparison(instances)
     return instances, summary, moce_cache
@@ -677,9 +760,34 @@ def evaluate_threshold_sensitivity(
     adjustment_step: float,
     display_decimals: int,
     main_moce_cache: Optional[Mapping[int, dict]] = None,
+    checkpoint_path: Optional[Union[str, Path]] = None,
+    checkpoint_tag: str = "",
+    resume: bool = True,
+    progress: bool = False,
 ) -> pd.DataFrame:
     rows: List[dict] = []
     predictions = baseline_predictions.loc[:, outcome_names].to_numpy(dtype=float)
+    signature = json.dumps({
+        "kind": "threshold_sensitivity_v1",
+        "data": _checkpoint_data_signature(X, baseline_predictions, outcome_names),
+        "model": checkpoint_tag,
+        "threshold_specs": {
+            name: {"lb": list(map(float, bounds["lb"])), "ub": list(map(float, bounds["ub"]))}
+            for name, bounds in threshold_specs.items()
+        },
+        "main_name": main_name,
+        "actionable_features": list(actionable_features),
+        "adjustment_mode": adjustment_mode, "adjustment_step": adjustment_step,
+        "display_decimals": display_decimals,
+    }, sort_keys=True)
+    records_by_spec = {}
+    if checkpoint_path is not None and resume:
+        saved_state = _checkpoint_load(checkpoint_path, signature)
+        if saved_state is not None:
+            records_by_spec = saved_state["records_by_spec"]
+            if progress:
+                n_saved = sum(map(len, records_by_spec.values()))
+                print(f"[SENSITIVITY] Resumed {n_saved} employee-scenario records from {checkpoint_path}", flush=True)
 
     for specification, bounds in threshold_specs.items():
         lb = list(bounds["lb"])
@@ -687,8 +795,23 @@ def evaluate_threshold_sensitivity(
         initial_valid = np.array([jointly_valid(pred, lb, ub) for pred in predictions], dtype=bool)
         requiring_change = np.where(~initial_valid)[0]
         records: List[dict] = []
+        saved_records = records_by_spec.setdefault(specification, {})
+        if not set(map(int, saved_records)).issubset(set(map(int, requiring_change))):
+            raise ValueError(f"Sensitivity checkpoint has unexpected indices for {specification}.")
+        if progress:
+            print(
+                f"[SENSITIVITY {specification}] {len(saved_records)}/{len(requiring_change)} employees already completed",
+                flush=True,
+            )
 
-        for index in requiring_change:
+        for position, index in enumerate(requiring_change, start=1):
+            index = int(index)
+            if index in saved_records:
+                records.append(saved_records[index])
+                continue
+            employee_start = time.perf_counter()
+            if progress:
+                print(f"[SENSITIVITY {specification}] {position}/{len(requiring_change)} | employee row {index} | START", flush=True)
             factual = X.iloc[index].astype(float)
             baseline_prediction = predictions[index]
             if specification == main_name and main_moce_cache is not None and index in main_moce_cache:
@@ -714,15 +837,26 @@ def evaluate_threshold_sensitivity(
             display_candidate = result["display_candidate"]
             changed = _changed_features(factual, display_candidate, actionable_features)
             distance = float(sum(abs(float(display_candidate[f]) - float(factual[f])) for f in actionable_features))
-            records.append(
-                {
-                    "solution_available": bool(result["solution_available"]),
-                    "joint_valid": jointly_valid(solution_prediction, lb, ub),
-                    "distance": distance,
-                    "changed_count": len(changed),
-                    "solve_time": float(result["solve_time_seconds"]),
-                }
-            )
+            record = {
+                "solution_available": bool(result["solution_available"]),
+                "joint_valid": jointly_valid(solution_prediction, lb, ub),
+                "distance": distance,
+                "changed_count": len(changed),
+                "solve_time": float(result["solve_time_seconds"]),
+            }
+            records.append(record)
+            saved_records[index] = record
+            if checkpoint_path is not None:
+                _checkpoint_save(checkpoint_path, {
+                    "signature": signature, "records_by_spec": records_by_spec,
+                })
+            if progress:
+                elapsed = time.perf_counter() - employee_start
+                status = "valid" if record["solution_available"] and record["joint_valid"] else "unavailable/invalid"
+                print(
+                    f"[SENSITIVITY {specification}] {position}/{len(requiring_change)} | employee row {index} "
+                    f"| DONE | {elapsed:.1f}s | MOCE {status}", flush=True,
+                )
 
         record_df = pd.DataFrame(records)
         available = record_df["solution_available"].astype(bool) if len(record_df) else pd.Series(dtype=bool)

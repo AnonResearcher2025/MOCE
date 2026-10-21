@@ -3,8 +3,8 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split
 from pyomo.environ import *
+from pyomo.opt import TerminationCondition
 import constraint_learning as cl
-import run_MLmodels as rm
 import os
 import pickle
 from scipy import stats
@@ -103,115 +103,6 @@ def prep_data(X, y, numerical, one_hot_encoding=True, scaling=True):
     return X, X_train, X_test, y_train_temp, y_test_temp, categorical_names, data_pip
 
 
-def train_models(outcome_dict, version):
-    '''
-    train the predictive models for each outcome.
-    outcome_dict = dictionary containing for each outcome: the predictive models to train, the type of task,
-    the features, the train and test data
-    '''
-    performance = pd.DataFrame()
-
-    if not os.path.exists('results/'):
-        os.makedirs('results/')
-
-    for outcome in outcome_dict:
-        # print(f'Learning a constraint for {outcome}')
-        task_type = outcome_dict[outcome]['task']
-        alg_list = outcome_dict[outcome]['alg_list']
-        X_train = outcome_dict[outcome]['X_train'][outcome_dict[outcome]['X features']]
-        X_test = outcome_dict[outcome]['X_test'][outcome_dict[outcome]['X features']]
-        y_train = outcome_dict[outcome]['y_train']
-        y_test = outcome_dict[outcome]['y_test']
-
-        for alg in alg_list:
-            if not os.path.exists('results/%s/' % alg):
-                os.makedirs('results/%s/' % alg)
-            # print(f'Training {alg}')
-            s = 0
-
-            alg_run = alg
-            #alg_run = 'rf_shallow' if alg == 'rf' else alg
-
-            m, perf = rm.run_model(X_train, y_train, X_test, y_test, alg_run, outcome, task=task_type,
-                                   seed=s, cv_folds=5,
-                                   save=True
-                                   )
-
-            ## Save model
-            if y_train.ndim == 1:
-                constraintL = cl.ConstraintLearning(X_train, y_train, m, alg)
-                constraint_add = constraintL.constraint_extrapolation(task_type)
-                constraint_add.to_csv('results/%s/%s_%s_model.csv' % (alg, version, outcome), index=False)
-            else:
-                constraint_add = pd.DataFrame()
-                for i in range(y_train.shape[1]):
-                    constraintL = cl.ConstraintLearning(X_train, y_train.iloc[:, i], m, alg, i)
-                    constraint_add = constraintL.constraint_extrapolation(task_type)
-                    constraint_add.to_csv('results/%s/%s_%s_model.csv' % (alg, version, y_train.columns[i]), index=False)
-
-            ## Extract performance metrics
-            try:
-                perf['auc_train'] = roc_auc_score(y_train >= threshold, m.predict(X_train))
-                perf['auc_test'] = roc_auc_score(y_test >= threshold, m.predict(X_test))
-            except:
-                perf['auc_train'] = np.nan
-                perf['auc_test'] = np.nan
-
-            perf['seed'] = s
-            perf['outcome'] = outcome
-            perf['alg'] = alg
-            perf['save_path'] = 'results/%s/%s_%s_model.csv' % (alg, version, outcome)
-
-            perf.to_csv('results/%s/%s_%s_performance.csv' % (alg, version, outcome), index=False)
-
-            # performance = performance.append(perf)
-            performance = pd.concat([performance, perf], ignore_index=True)
-            print()
-    # print('Saving the performance...')
-    performance.to_csv('results/%s_performance.csv' % version, index=False)
-    # print('Done!')
-
-
-def perf_trained_models(version, outcome_dict):
-    performance = pd.read_csv('results/%s_performance.csv' % version)
-    performance['task'] = 'continuous'
-    for outcome in outcome_dict.keys():
-        performance.loc[performance['outcome']==outcome, 'task'] = outcome_dict[outcome]['task']
-    performance = performance.dropna(axis='columns')
-    return performance
-
-
-def load_model(algorithms, outcome_dict, CE_outcome):
-    models = {}
-    y_pred = {}
-
-    for outcome in outcome_dict:
-        algorithm = algorithms[outcome]
-        X_train = outcome_dict[outcome]['X_train']
-        X_test = outcome_dict[outcome]['X_test']
-        y_train = outcome_dict[outcome]['y_train']
-        y_test = outcome_dict[outcome]['y_test']
-
-        # Load predictive model
-        if algorithm == 'rf': algorithm = 'rf_shallow'
-        path = 'results/' + algorithm + '_' + outcome + '_trained.pkl'
-        with open(path, 'rb') as f:
-            clf = pickle.load(f)
-
-        # if we load the predictive model to ensure validity, we want to extract X_test_0
-        # i.e. the instances that were predicted as 0. We can use these as factual instances
-        if outcome == CE_outcome:
-            y_pred = clf.predict(X_test)
-            y_pred_0 = np.where(y_pred == 0)
-            X_test_0 = X_test.iloc[y_pred_0[0], :].copy()
-            X_test_0.head()
-        else:
-            y_pred[outcome] = clf.predict(X_test)
-
-        models[outcome] = clf
-
-    return y_pred, models
-
 ######## OPTIMIZATION ########
 def opt(X, X1, u, F_r, F_b, F_int, F_coh, I, L, Pers_I, P, sp, mu, tr_region, enlarge_tr, num_counterfactuals,
         model_master, scaler=None, obj='l2', bounds=None):
@@ -219,6 +110,15 @@ def opt(X, X1, u, F_r, F_b, F_int, F_coh, I, L, Pers_I, P, sp, mu, tr_region, en
 
     conceptual_model = ce_helpers.CounterfactualExplanation(X, u, F_r, F_b, F_int, F_coh, mu, sparsity_RHS, I, L,
                                                             Pers_I, P, obj=obj, sparsity=sp, tr=tr_region)
+    # Apply physical variable bounds regardless of predictive model family.
+    # Previously these were only imposed inside the MLP embedding, so HRM
+    # would silently lose its [1,7] bounds when switching from MLP to RF.
+    if bounds:
+        for feature, (lower, upper) in bounds.items():
+            if lower is not None:
+                conceptual_model.x[feature].setlb(lower)
+            if upper is not None:
+                conceptual_model.x[feature].setub(upper)
     MIP_final_model = em.optimization_MIP(conceptual_model, conceptual_model.x, model_master, X1, tr=tr_region,
                                           enlarge_tr=enlarge_tr, mlp_x_bounds=bounds)
     opt = SolverFactory('gurobi_persistent')
@@ -229,6 +129,11 @@ def opt(X, X1, u, F_r, F_b, F_int, F_coh, I, L, Pers_I, P, sp, mu, tr_region, en
     opt.set_gurobi_param('PoolSearchMode', 2)
 
     results = opt.solve(MIP_final_model, load_solutions=True, tee=False)
+    termination = results.solver.termination_condition
+    if termination in (TerminationCondition.infeasible, TerminationCondition.infeasibleOrUnbounded):
+        raise RuntimeError(f"MOCE_INFEASIBLE: solver termination {termination}")
+    if opt.get_model_attr('SolCount') < 1:
+        raise RuntimeError(f"MOCE_NO_SOLUTION: solver termination {termination}")
 
     solution = []
     for i in X.columns:
