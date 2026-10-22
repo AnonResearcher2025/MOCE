@@ -1,0 +1,34 @@
+# Generated analysis outputs (CV tables, MOCE comparisons, figures, exports,
+# fitted models, and HRM progress checkpoints).
+results/
+
+# Python bytecode and cache directories.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python / Conda environments and notebook state.
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Intermediate files and solver logs.
+*.pkl
+*.joblib
+*.log
+*.lp
+*.sol
+*.mps
+*.tmp
+
+# Local credentials, operating system, and IDE files.
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

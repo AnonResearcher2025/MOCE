@@ -1,0 +1,12 @@
+# Install with: python -m pip install -r requirements.txt
+# Python 3.11 recommended. Package versions are intentionally not pinned;
+# exact versions should be recorded separately for a frozen research environment.
+
+numpy
+pandas
+scipy
+matplotlib
+scikit-learn
+joblib
+pyomo
+gurobipy
