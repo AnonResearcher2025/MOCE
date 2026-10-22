@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import clone
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 
 
 def ensure_output_dir(path: Union[str, Path]) -> Path:
@@ -109,6 +109,7 @@ def evaluate_predictive_adequacy(
     n_splits: int = 5,
     n_repeats: int = 3,
     random_state: int = 42,
+    groups=None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate the selected model using repeated shuffled K-fold CV.
 
@@ -125,12 +126,42 @@ def evaluate_predictive_adequacy(
     y = y.reset_index(drop=True)
     detail_rows: List[dict] = []
 
+    if groups is not None:
+        groups = np.asarray(groups)
+
+        if len(groups) != len(X):
+            raise ValueError("groups and X must have the same length.")
+
+        if pd.isna(groups).any():
+            raise ValueError("groups contains missing values.")
+
+        if len(np.unique(groups)) < n_splits:
+            raise ValueError("Not enough distinct groups for GroupKFold.")
+
     for repeat in range(n_repeats):
-        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state + repeat)
-        model_pred = np.full((len(X), len(outcome_names)), np.nan, dtype=float)
+
+        if groups is None:
+            splitter = KFold(
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=random_state + repeat
+            )
+            splits = splitter.split(X)
+
+        else:
+            splitter = GroupKFold(
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=random_state + repeat
+            )
+            splits = splitter.split(X, y, groups=groups)
+
+        model_pred = np.full(
+            (len(X), len(outcome_names)), np.nan, dtype=float
+        )
         baseline_pred = np.full_like(model_pred, np.nan)
 
-        for fold, (train_idx, test_idx) in enumerate(splitter.split(X), start=1):
+        for fold, (train_idx, test_idx) in enumerate(splits, start=1):
             estimator = clone(fitted_model)
             estimator.fit(X.iloc[train_idx], y.iloc[train_idx])
             fold_pred = np.asarray(estimator.predict(X.iloc[test_idx]), dtype=float)

@@ -190,6 +190,8 @@ out = data.columns[-o:].tolist()
 n = len(data.columns) - o
 X = data.iloc[:, :n]
 y = data[out]
+new_group = data[M].ne(data[M].shift()).any(axis=1)
+groups = new_group.cumsum().to_numpy()
 
 
 # ============================================================
@@ -217,6 +219,7 @@ cv_detail, cv_summary = me.evaluate_predictive_adequacy(
     n_splits=cv_folds,
     n_repeats=cv_repeats,
     random_state=rn,
+    groups=groups,
 )
 cv_detail.to_csv(evaluation_path / f"{setting_slug}_predictive_adequacy_repeats.csv", index=False)
 cv_summary.to_csv(evaluation_path / f"{setting_slug}_predictive_adequacy_summary.csv", index=False)
