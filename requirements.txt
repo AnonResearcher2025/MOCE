@@ -6,7 +6,7 @@ numpy
 pandas
 scipy
 matplotlib
-scikit-learn
+scikit-learn>=1.6
 joblib
 pyomo
 gurobipy
