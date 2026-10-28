@@ -2,8 +2,6 @@
 
 This repository contains the **data and Python source code** for the empirical analyses accompanying a research manuscript. It implements **multi-outcome counterfactual explanations (MOCEs)** using fitted predictive models and constrained optimization. The analyses compare MOCEs with single-outcome counterfactual explanations (CEs) and sequential single-outcome procedures, and examine sensitivity to alternative outcome requirements.
 
-This README also documents the **empirical evaluation workflow, aggregate distributional findings, setting-specific optimization formulations, and implementation details** that were described more extensively in an earlier manuscript version. These additions are documentation only; no changes to the analysis scripts are required.
-
 The three case studies illustrate distinct decision-support settings:
 
 | Setting | Dataset | Variables allowed to change | Predicted outcomes | Predictive model |
@@ -46,7 +44,7 @@ MOCE/
 
 ## Empirical evaluation workflow
 
-The following diagram is a **case-study implementation workflow** corresponding to the more detailed empirical-design figure in an earlier manuscript version. It is not intended to replace a general conceptual figure of MOCE as a decision-support framework.
+The following diagram is a **case-study implementation workflow** corresponding to the more detailed empirical-design figure.
 
 ```mermaid
 flowchart TD
@@ -134,7 +132,7 @@ Only after all three case-study scripts have produced their evaluation outputs, 
 python "Cross-setting Summary.py"
 ```
 
-This generates compact cross-setting CSVs. It does **not** rerun the predictive models or optimizations.
+This generates compact cross-setting CSVs.
 
 ## Aggregate results: distributional shifts in the three settings
 
