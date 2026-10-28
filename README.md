@@ -119,87 +119,6 @@ python "Cross-setting Summary.py"
 
 This generates compact cross-setting CSVs. It does **not** rerun the predictive models or optimizations.
 
-## Aggregate results
-
-The figures compare observed and MOCE profiles across four groups defined by the initial predicted acceptability of performance and the second outcome. Each figure shows the two most frequently changed counterfactual variables and both predicted outcomes. All results refer to the main outcome requirements.
-
-### Initial predicted outcome status
-
-The counts below refer to initial fitted-model predictions under the **main** thresholds. “Met” and “unmet” refer to the relevant acceptance condition, not the numerical direction of an outcome; for stress and turnover intention, a lower predicted value is preferable.
-
-| Initial status: performance / second outcome | Skills | Big Five | HRM Practices |
-| --- | ---: | ---: | ---: |
-| Unmet / unmet | 10 | 9 | 16 |
-| Unmet / met | 9 | 51 | 52 |
-| Met / unmet | 70 | 47 | 36 |
-| Met / met (no change required) | 49 | 161 | 160 |
-| **Total employees** | **138** | **268** | **264** |
-| **Profiles requiring MOCE** | **89** | **107** | **104** |
-
-### Skills: performance and job satisfaction
-
-![Aggregate results for Skills](Skills.png)
-
-Technical Skills was changed in **79 of the 89** generated MOCE profiles, far more often than Knowledge (**6**), Experience (**4**), or Independent Work (**4**). Because the feasible set permits **increases only**, the figure's movements in skill variables are upward or unchanged. The concentration was especially pronounced among employees with initially acceptable performance but unacceptable satisfaction: **Technical Skills alone** was the change pattern for **61** profiles. In the initially performance-unacceptable / satisfaction-acceptable group, changing Technical Skills alone occurred in **5** profiles. In the group failing both outcomes, Technical Skills alone occurred in **6** profiles and Technical Skills plus Experience in **2**.
-
-### Big Five: performance and stress
-
-![Aggregate results for Big Five](Big%20Five.png)
-
-Neuroticism (**78 of 107 MOCEs**) and Agreeableness (**32**) were the most frequently changed dimensions, followed by Imagination (**16**), Conscientiousness (**13**), and Extraversion (**2**). The distributional shifts were particularly pronounced for Neuroticism among profiles initially below the performance threshold, with jointly acceptable alternatives often showing lower Neuroticism. In the performance-unmet / stress-met group, changing **Neuroticism alone** occurred in **38** profiles; when performance was met but stress was unmet, **Agreeableness alone** (**21**) and **Neuroticism alone** (**13**) were the most frequent patterns. This is a distinction between fitted-model counterfactual patterns, **not** evidence of causal relationships or a recommendation to alter personality traits.
-
-### HRM Practices: performance and turnover intention
-
-![Aggregate results for HRM Practices](HRM.png)
-
-Change patterns were more dispersed across variables than in the other settings. **Prehire Tests** appeared in **44 of the 104** generated MOCE profiles, followed by **Complaint Procedure** (**32**), **Selective Hiring** (**24**), and **Job Training** (**15**). The plot also shows a recurring shift toward **lower Prehire Tests** levels among profiles initially below the performance threshold. When performance was unmet but turnover intention was met, the most frequent patterns were Prehire Tests alone (**12**), Selective Hiring alone (**9**), and Prehire Tests together with Complaint Procedure (**5**). When performance was met but turnover intention was not, Selective Hiring (**8**) and Job Training (**7**) were the most common single-practice patterns. These are model-based associations, not causal findings that reducing prehire testing or changing other practices would improve outcomes.
-
-<details>
-<summary>Complete main-threshold variable-level change frequencies</summary>
-
-The frequency of a variable is the number of MOCE profiles in which that variable changed, **not** the size of the change or a measure of predictive importance. A solution may change several variables, so frequencies sum to more than the number of MOCE profiles. 
-
-| Skills variable | Profiles changed |
-| --- | ---: |
-| Technical Skills | 79 |
-| Knowledge | 6 |
-| Experience | 4 |
-| Independent Work | 4 |
-| Judgement | 3 |
-| Professionalism | 1 |
-| Critical Thinking | 0 |
-| **Total variable changes** | **97** |
-
-| Big Five variable | Profiles changed |
-| --- | ---: |
-| Neuroticism | 78 |
-| Agreeableness | 32 |
-| Imagination | 16 |
-| Conscientiousness | 13 |
-| Extraversion | 2 |
-| **Total variable changes** | **141** |
-
-| HRM practice | Profiles changed |
-| --- | ---: |
-| Prehire Tests | 44 |
-| Complaint Procedure | 32 |
-| Selective Hiring | 24 |
-| Job Training | 15 |
-| Individual Bonuses | 9 |
-| Goals Communication | 7 |
-| Structured Interviews | 6 |
-| Suggestion Adoption | 5 |
-| Employee Participation | 3 |
-| Group Bonuses | 3 |
-| Internal Promotion | 3 |
-| Job Autonomy | 1 |
-| Performance Evaluation | 0 |
-| Pay Competitiveness | 0 |
-| Performance Pay | 0 |
-| **Total variable changes** | **152** |
-
-</details>
-
 ## Setting-specific counterfactual optimization formulations
 
 The following formulations specify the **main** outcome requirements for each setting; the lenient and demanding thresholds are given above.
@@ -310,6 +229,88 @@ The HRM script additionally writes local checkpoint files. The predictive-model 
 - `cross_setting_threshold_sensitivity.csv`
 
 The best-of-two sequential benchmark can be constructed from the instance-level comparison records.
+
+## Aggregate results
+
+The figures compare observed and MOCE profiles across four groups defined by the initial predicted acceptability of performance and the second outcome. Each figure shows the two most frequently changed counterfactual variables and both predicted outcomes. All results refer to the main outcome requirements.
+
+### Initial predicted outcome status
+
+The counts below refer to initial fitted-model predictions under the **main** thresholds. “Met” and “unmet” refer to the relevant acceptance condition, not the numerical direction of an outcome; for stress and turnover intention, a lower predicted value is preferable.
+
+| Initial status: performance / second outcome | Skills | Big Five | HRM Practices |
+| --- | ---: | ---: | ---: |
+| Unmet / unmet | 10 | 9 | 16 |
+| Unmet / met | 9 | 51 | 52 |
+| Met / unmet | 70 | 47 | 36 |
+| Met / met (no change required) | 49 | 161 | 160 |
+| **Total employees** | **138** | **268** | **264** |
+| **Profiles requiring MOCE** | **89** | **107** | **104** |
+
+### Skills: performance and job satisfaction
+
+![Aggregate results for Skills](Skills.png)
+
+Technical Skills was changed in **79 of the 89** generated MOCE profiles, far more often than Knowledge (**6**), Experience (**4**), or Independent Work (**4**). Because the feasible set permits **increases only**, the figure's movements in skill variables are upward or unchanged. The concentration was especially pronounced among employees with initially acceptable performance but unacceptable satisfaction: **Technical Skills alone** was the change pattern for **61** profiles. In the initially performance-unacceptable / satisfaction-acceptable group, changing Technical Skills alone occurred in **5** profiles. In the group failing both outcomes, Technical Skills alone occurred in **6** profiles and Technical Skills plus Experience in **2**.
+
+### Big Five: performance and stress
+
+![Aggregate results for Big Five](Big%20Five.png)
+
+Neuroticism (**78 of 107 MOCEs**) and Agreeableness (**32**) were the most frequently changed dimensions, followed by Imagination (**16**), Conscientiousness (**13**), and Extraversion (**2**). The distributional shifts were particularly pronounced for Neuroticism among profiles initially below the performance threshold, with jointly acceptable alternatives often showing lower Neuroticism. In the performance-unmet / stress-met group, changing **Neuroticism alone** occurred in **38** profiles; when performance was met but stress was unmet, **Agreeableness alone** (**21**) and **Neuroticism alone** (**13**) were the most frequent patterns. This is a distinction between fitted-model counterfactual patterns, **not** evidence of causal relationships or a recommendation to alter personality traits.
+
+### HRM Practices: performance and turnover intention
+
+![Aggregate results for HRM Practices](HRM.png)
+
+Change patterns were more dispersed across variables than in the other settings. **Prehire Tests** appeared in **44 of the 104** generated MOCE profiles, followed by **Complaint Procedure** (**32**), **Selective Hiring** (**24**), and **Job Training** (**15**). The plot also shows a recurring shift toward **lower Prehire Tests** levels among profiles initially below the performance threshold. When performance was unmet but turnover intention was met, the most frequent patterns were Prehire Tests alone (**12**), Selective Hiring alone (**9**), and Prehire Tests together with Complaint Procedure (**5**). When performance was met but turnover intention was not, Selective Hiring (**8**) and Job Training (**7**) were the most common single-practice patterns. These are model-based associations, not causal findings that reducing prehire testing or changing other practices would improve outcomes.
+
+<details>
+<summary>Complete main-threshold variable-level change frequencies</summary>
+
+The frequency of a variable is the number of MOCE profiles in which that variable changed, **not** the size of the change or a measure of predictive importance. A solution may change several variables, so frequencies sum to more than the number of MOCE profiles. 
+
+| Skills variable | Profiles changed |
+| --- | ---: |
+| Technical Skills | 79 |
+| Knowledge | 6 |
+| Experience | 4 |
+| Independent Work | 4 |
+| Judgement | 3 |
+| Professionalism | 1 |
+| Critical Thinking | 0 |
+| **Total variable changes** | **97** |
+
+| Big Five variable | Profiles changed |
+| --- | ---: |
+| Neuroticism | 78 |
+| Agreeableness | 32 |
+| Imagination | 16 |
+| Conscientiousness | 13 |
+| Extraversion | 2 |
+| **Total variable changes** | **141** |
+
+| HRM practice | Profiles changed |
+| --- | ---: |
+| Prehire Tests | 44 |
+| Complaint Procedure | 32 |
+| Selective Hiring | 24 |
+| Job Training | 15 |
+| Individual Bonuses | 9 |
+| Goals Communication | 7 |
+| Structured Interviews | 6 |
+| Suggestion Adoption | 5 |
+| Employee Participation | 3 |
+| Group Bonuses | 3 |
+| Internal Promotion | 3 |
+| Job Autonomy | 1 |
+| Performance Evaluation | 0 |
+| Pay Competitiveness | 0 |
+| Performance Pay | 0 |
+| **Total variable changes** | **152** |
+
+</details>
+
 
 ## Methodological notes
 
